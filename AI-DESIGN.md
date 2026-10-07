@@ -76,6 +76,34 @@ The same rule extends to every other path in this design: the web OCR and delete
 
 This applies directly to any chatbot that serves more than one customer from one index: order history, saved addresses, account notes, or B2B price lists. Retrieval filters, set from a verified identity, are the boundary. The prompt is not.
 
+## Security model: limit what an attack can reach
+
+No prompt can fully stop prompt injection, so the design doesn't depend on one. It limits what a successful injection can do.
+
+Injection can come in two ways:
+
+- **Direct**, through the question itself ("ignore your rules and..."). The person typing it can only affect their own answer.
+- **Indirect**, through retrieved text. Scanned documents land in the prompt, so a page that says "ignore previous instructions" gets read by the model. This is the harder case, and the one that matters most for any chatbot that reads content written by other people.
+
+What keeps the damage small:
+
+- **The model can't take actions.** It has no tools, no API calls, and no write access to anything. Its only output is text shown to the person who asked. A hijacked answer is a wrong answer, not a refund, a deleted file, or a data export.
+- **Nothing secret in the prompt.** The prompt holds the question and the user's own retrieved chunks. No credentials, no system internals, no other users' data, so there's nothing for an injection to leak.
+- **Retrieved text only reaches its owner.** With the per-user filtering described above, an injected document can only show up in answers to the person who uploaded it. Isolation is the defense against cross-user injection, not just against data leaks.
+- **The prompt template is server-side.** Clients send a question string. They can't add system instructions, swap the template, or pick the model.
+- **Answers render as plain text.** Neither client renders model output as HTML, so injected markup or script in an answer can't run.
+- **Identity comes from the token, every time.** In this design, every Lambda takes the user ID from the Cognito JWT that API Gateway already verified. Request bodies never decide whose data gets touched.
+- **No credentials on the device.** Uploads go through presigned URLs that expire after 5 minutes, scoped to a key the server picked.
+- **Closed sign-up.** The Cognito user pool is invite-only, so strangers can't create accounts and upload documents.
+
+For a public-facing chatbot I'd add these layers on top:
+
+- **Throttling and per-user quotas** on the chat endpoint, so one account can't run up model costs or hammer the API
+- **Bedrock Guardrails**: a prompt-attack filter on input, and a contextual grounding check on output that blocks answers the sources don't support
+- **Delimited context**: wrap retrieved text in clear markers and tell the model it's data, not instructions. It helps, but it's not a guarantee
+- **An adversarial test set**: injected documents and jailbreak questions, run on every prompt or model change
+- **Permission checks outside the model for any tool.** Once a chatbot can look up orders or start returns, each tool call needs a server-side check that the user owns that order, plus a confirmation step for anything that changes state. Anything the model sees, it can say. Anything it can call, an attacker can try to call.
+
 ## Ingestion: event-driven, built for bursts
 
 A new extracted-text file in S3 fires an event that starts a Knowledge Base ingestion job. Nobody has to remember to re-index. The Knowledge Base splits the text into fixed 500-token chunks with 10% overlap and embeds them with Titan Text Embeddings v2. Scanned documents are short and fairly uniform, so fixed-size chunking works well and is easy to predict. Smarter chunking (by section or by heading) would earn its keep on long PDFs.

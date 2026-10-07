@@ -81,6 +81,7 @@ sequenceDiagram
 - **Retrieval-augmented generation (RAG) end to end**: ingestion, chunking, embeddings, vector search, grounded generation, and citations, all on managed AWS services.
 - **Grounding over fluency.** The prompt template is locked on the server. The model answers only from retrieved text, cites the source, and returns a fixed "I couldn't find that in your documents" message instead of guessing.
 - **Per-user data isolation in a shared vector index.** Only the server writes what gets indexed, and every query filters by the user ID from the verified token. Details in AI-DESIGN.md.
+- **A security model that assumes prompt injection will happen.** The model has no tools and nothing secret in its prompt, and retrieved text only reaches the person who uploaded it, so a hijacked answer stays a wrong answer. See [Security model](./AI-DESIGN.md#security-model-limit-what-an-attack-can-reach).
 - **Cost-driven model and vector store choices.** A small, cheap model for answers, and a free-tier vector store instead of a managed one with a high monthly floor.
 - **Conversation continuity**: Bedrock session IDs for multi-turn context, plus a per-user chat history in DynamoDB that expires on its own.
 
