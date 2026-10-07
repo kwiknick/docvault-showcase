@@ -72,7 +72,7 @@ graph TD
 
 Because only the server writes the metadata, a client can't forge a sidecar that claims someone else's user ID. The same metadata gives each citation the document's real title.
 
-The same rule covers every other path: the web OCR endpoint and the delete endpoint derive the user from the token and refuse any key outside that user's prefix. Each rule has a pytest + moto test that tries to cross the boundary and expects to be refused.
+The same rule extends to every other path in this design: the web OCR and delete endpoints take the user from the token and refuse any key outside that user's prefix. Each rule has a pytest + moto test that tries to cross the boundary and expects to be refused.
 
 This applies directly to any chatbot that serves more than one customer from one index: order history, saved addresses, account notes, or B2B price lists. Retrieval filters, set from a verified identity, are the boundary. The prompt is not.
 
