@@ -50,6 +50,26 @@ The design that closes it:
 - **The Knowledge Base indexes only `kb/`.** The same review found the data source also pointed at original images and other raw uploads. Narrowing it to `kb/` fixes that too.
 - **Every retrieval filters on `userId`**, and that value comes from the verified JWT, never from the request body.
 
+The planned flow (in progress, see the README's Status section):
+
+```mermaid
+graph TD
+    C[Mobile / web client] -->|PUT via presigned URL\nkey built from JWT| U[(S3\nusers/userId/extracted/)]
+    U -->|ObjectCreated event| IDX[Lambda\nindexer]
+    IDX -->|copy text| K[(S3\nkb/userId/docId/text.txt)]
+    IDX -->|write sidecar\nuserId, docId, title| M[(S3\ntext.txt.metadata.json)]
+    IDX -->|start ingestion\nhandle ConflictException| KB[Bedrock\nKnowledge Base]
+    K --> KB
+    M --> KB
+    KB -->|chunks + userId metadata| V[(Pinecone)]
+
+    Q[Chat request] -->|JWT| CH[Lambda\nchat API]
+    CH -->|RetrieveAndGenerate\nfilter: userId = token sub| KB
+    KB -->|only this user's chunks| CH
+
+    C --x|blocked: clients cannot write to kb/| K
+```
+
 Because only the server writes the metadata, a client can't forge a sidecar that claims someone else's user ID. The same metadata also fixes a smaller problem: citations show the document's real title instead of the generic `text.txt` filename.
 
 The review also found two related holes in the web OCR path, where a client-supplied S3 key let one user point Textract at another user's file. Each finding got a failing pytest + moto test before any fix. The tests show the hole exists, then show it closed.
