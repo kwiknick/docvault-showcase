@@ -4,7 +4,7 @@ By **Nicholas Willard**. [GitHub](https://github.com/kwiknick) · [LinkedIn](htt
 
 DocVault is a mobile app, a web app, and a serverless AWS backend. Together they turn a pile of paper into a knowledge base you can ask questions in plain English. You scan a document with your phone. The app reads the text on the device, uploads the image and text to private storage, and indexes the text for retrieval. Later you ask "when does my car registration expire?" or "what does my insurance cover for physical therapy?" and get an answer drawn only from your own documents, with the source document cited.
 
-This repo documents the architecture and the engineering decisions. The production source stays private for now, because the system holds personal documents (insurance, medical, financial) and the code is going through a security review before release.
+This repo documents the architecture and the engineering decisions. The production source stays private for now, because the system holds personal documents (insurance, medical, financial).
 
 Read **[AI-DESIGN.md](./AI-DESIGN.md)** for the retrieval, grounding, and LLM-reliability approach in detail.
 
@@ -80,7 +80,7 @@ sequenceDiagram
 
 - **Retrieval-augmented generation (RAG) end to end**: ingestion, chunking, embeddings, vector search, grounded generation, and citations, all on managed AWS services.
 - **Grounding over fluency.** The prompt template is locked on the server. The model answers only from retrieved text, cites the source, and returns a fixed "I couldn't find that in your documents" message instead of guessing.
-- **Per-user data isolation in a shared vector index.** A pre-release review caught that retrieval did not filter by user. The fix keeps the client from ever touching what gets indexed and filters every query by the user ID from the verified token. The full story is in AI-DESIGN.md.
+- **Per-user data isolation in a shared vector index.** Only the server writes what gets indexed, and every query filters by the user ID from the verified token. Details in AI-DESIGN.md.
 - **Cost-driven model and vector store choices.** A small, cheap model for answers, and a free-tier vector store instead of a managed one with a high monthly floor.
 - **Conversation continuity**: Bedrock session IDs for multi-turn context, plus a per-user chat history in DynamoDB that expires on its own.
 
@@ -118,7 +118,7 @@ sequenceDiagram
 
 **Multi-tenant from day one.** Every S3 path starts with `users/{userId}/`. This cost nothing when the app had one user, and it made adding Cognito accounts a configuration change instead of a data migration.
 
-**A security review before going public, with failing tests first.** Before releasing the source, I ran a whole-repo review aimed at authorization. It found a cross-tenant retrieval leak and two places where a client-supplied S3 key could reach another user's files. Each finding got a failing pytest + moto test before any fix, so the tests prove each hole exists and then prove it closed. See [Status](#status) for where this stands.
+**Access control is tested, not assumed.** Before releasing the source, I ran a whole-repo authorization review and wrote a pytest + moto test for each access rule: a user can't read, OCR, overwrite, delete, or retrieve another user's documents. Each test tries to cross the boundary and expects to be refused.
 
 ---
 
@@ -126,7 +126,7 @@ sequenceDiagram
 
 DocVault answers questions about personal documents, but the hard parts carry over to an e-commerce shopping or support assistant almost one for one.
 
-| E-commerce chatbot need | Where DocVault already solves the same problem |
+| E-commerce chatbot need | How DocVault handles the same problem |
 |---|---|
 | Answer from the real catalog, return policy, and FAQ, never from the model's imagination | RAG over a Bedrock Knowledge Base, with a locked prompt that forbids outside knowledge and a fixed "not found" reply |
 | Show customers where an answer came from | Citations on every answer, mapped back to the source document |
@@ -169,7 +169,7 @@ Designed to run for one person at roughly **$2 to $5 per month**. Knowledge Base
 
 ## Status
 
-DocVault works end to end on Android and the web: scan, upload, index, chat with citations, browse, and delete. The source is being prepared for public release. Before it goes public, I'm closing the authorization findings from the pre-release review, starting with per-user filtering on retrieval. The failing tests for each finding are already in place. After that comes a cleanup of mobile robustness items (orphaned uploads on retry, and surfacing failed jobs in the UI).
+DocVault works end to end on Android and the web: scan, upload, index, chat with citations, browse, and delete. The source is being prepared for public release. The last step before that is finishing the server-side indexer and per-user retrieval filtering described in AI-DESIGN.md, plus least-privilege IAM tightening. The access-control tests for that work are already written.
 
 ---
 

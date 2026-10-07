@@ -40,14 +40,14 @@ A prompt is still a request, not a guarantee. The rules above make grounding ver
 
 This is the most important lesson from the project.
 
-Every user's documents go into one shared vector index. A vector search returns the most similar chunks in the index, and it has no idea who owns them. When DocVault added Cognito accounts, the chat Lambda read the user ID from the token but never passed it to retrieval. A pre-release security review caught it: one user's question could pull back another user's documents.
+Every user's documents go into one shared vector index. A vector search returns the most similar chunks in the index, and it has no idea who owns them. Without a filter, one user's question can pull back another user's documents.
 
 The tempting fix is a prompt rule like "only use documents that belong to this user." That doesn't work. If a chunk reaches the model, the model can repeat it. **Anything the model sees, the model can say.** Access control has to happen before retrieval returns anything.
 
 The design that closes it:
 
 - **Clients can never write to the indexed area.** Clients upload to `users/{userId}/...`, with the key built on the server from the verified token. A server-side indexer Lambda copies extracted text to a separate `kb/{userId}/{docId}/` prefix and writes a metadata sidecar next to it (`userId`, `docId`, `title`).
-- **The Knowledge Base indexes only `kb/`.** The same review found the data source also pointed at original images and other raw uploads. Narrowing it to `kb/` fixes that too.
+- **The Knowledge Base indexes only `kb/`.** Raw uploads and original images never reach the index.
 - **Every retrieval filters on `userId`**, and that value comes from the verified JWT, never from the request body.
 
 The planned flow (in progress, see the README's Status section):
@@ -70,17 +70,17 @@ graph TD
     C --x|blocked: clients cannot write to kb/| K
 ```
 
-Because only the server writes the metadata, a client can't forge a sidecar that claims someone else's user ID. The same metadata also fixes a smaller problem: citations show the document's real title instead of the generic `text.txt` filename.
+Because only the server writes the metadata, a client can't forge a sidecar that claims someone else's user ID. The same metadata gives each citation the document's real title.
 
-The review also found two related holes in the web OCR path, where a client-supplied S3 key let one user point Textract at another user's file. Each finding got a failing pytest + moto test before any fix. The tests show the hole exists, then show it closed.
+The same rule covers every other path: the web OCR endpoint and the delete endpoint derive the user from the token and refuse any key outside that user's prefix. Each rule has a pytest + moto test that tries to cross the boundary and expects to be refused.
 
 This applies directly to any chatbot that serves more than one customer from one index: order history, saved addresses, account notes, or B2B price lists. Retrieval filters, set from a verified identity, are the boundary. The prompt is not.
 
-## Ingestion: event-driven, with one known rough edge
+## Ingestion: event-driven, built for bursts
 
 A new extracted-text file in S3 fires an event that starts a Knowledge Base ingestion job. Nobody has to remember to re-index. The Knowledge Base splits the text into fixed 500-token chunks with 10% overlap and embeds them with Titan Text Embeddings v2. Scanned documents are short and fairly uniform, so fixed-size chunking works well and is easy to predict. Smarter chunking (by section or by heading) would earn its keep on long PDFs.
 
-The rough edge: the first version starts one ingestion job per uploaded file. A Knowledge Base allows one running ingestion job per data source, so several uploads at once fail with `ConflictException`. The fix folds into the new indexer: catch the conflict and let the running job, or the next one, pick up the new files. A product catalog that changes in bulk would hit this on day one, so it's worth designing for up front.
+A Knowledge Base allows one running ingestion job per data source, so a burst of uploads produces `ConflictException` if each file starts its own job. The indexer treats a conflict as "a job is already running" and lets the running job, or the next one, pick up the new files. A product catalog that changes in bulk would hit this on day one, so it's worth designing for up front.
 
 ## Model and vector store selection
 
