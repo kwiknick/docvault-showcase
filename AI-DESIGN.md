@@ -11,7 +11,7 @@ The model never answers from its own knowledge. Every question goes through Bedr
 3. The model writes an answer from the chunks only and cites where each claim came from.
 4. The Lambda pulls the source locations out of the response, removes duplicates, and returns them next to the answer.
 
-The model's job stays narrow: read a handful of short excerpts and restate the part that answers the question. It looks nothing up, remembers nothing about the user, and does no math on facts it has never seen. That narrow job is why a small, cheap model does the work well.
+The model's job stays narrow: read a handful of short excerpts and restate the part that answers the question. It looks nothing up, remembers nothing about the user, and does no math on facts it has never seen. Narrow does not mean trivial, though. Matching a question to the right excerpt still takes judgment, which is why the answer model ended up one size up from where I started (see [Model selection](#model-and-vector-store-selection)).
 
 ## The prompt is locked on the server
 
@@ -19,8 +19,15 @@ The prompt template lives in the Lambda, not in the client, and the user can't c
 
 ```
 You are a personal document assistant. Answer ONLY from the provided search results.
+The search results are the user's own documents and photos. Each one starts with
+'File: <name>', and the file name often says what or where the document is about
+(for example 'BeachTrip2024.jpg' is a photo from a beach trip in 2024). Photo
+descriptions say what the photo shows. Use the file name and the content together
+to match the question to a document.
+Contact details in the documents, such as phone numbers, email addresses, and
+mailing addresses, may be returned to the user.
 If the information is not in the documents, say 'I couldn't find that in your documents.'
-Do not infer, extrapolate, or use outside knowledge.
+Do not use outside knowledge.
 Always cite the source document filename.
 
 $search_results$
@@ -28,11 +35,12 @@ $search_results$
 Question: $query$
 ```
 
-Three things matter here:
+Four things matter here:
 
 - **"Only from the search results"** turns the model from a know-it-all into a reader. A plausible-sounding guess about an insurance policy is worse than no answer.
 - **A fixed "not found" sentence** instead of "say you don't know." A fixed string is something code can detect. It can trigger a fallback, a handoff to a person, or a log entry that shows which questions the documents can't answer.
 - **Citations are required,** so the user can always check the answer against the original document. Citations are the trust signal. The app shows no confidence scores, because a model's confidence is not evidence.
+- **Every rule in it came from a test that failed.** The first version said "do not infer, extrapolate," and the model then refused to connect a photo named `LeadvilleRaceCreekCrossing.jpg` to the question "how deep was the creek at Leadville?" It also declined to return a phone number from the user's own business card, treating it as personal data. Each line above fixes a failure I watched happen, while "no outside knowledge" still holds: "What is the capital of France?" gets the not-found reply.
 
 A prompt is still a request, not a guarantee. The rules above make grounding very likely. They do nothing for access control, which is the next section.
 
@@ -50,7 +58,7 @@ The design that closes it:
 - **The Knowledge Base indexes only `kb/`.** Raw uploads and original images never reach the index.
 - **Every retrieval filters on `userId`**, and that value comes from the verified JWT, never from the request body.
 
-The planned flow (in progress, see the README's Status section):
+The flow as built:
 
 ```mermaid
 graph TD
@@ -70,9 +78,14 @@ graph TD
     C --x|blocked: clients cannot write to kb/| K
 ```
 
-Because only the server writes the metadata, a client can't forge a sidecar that claims someone else's user ID. The same metadata gives each citation the document's real title.
+Because only the server writes the metadata, a client can't forge a sidecar that claims someone else's user ID. The same metadata gives each citation the document's real title, and a rename in the app rewrites the sidecar and re-indexes the document so answers cite the new name.
 
-The same rule extends to every other path in this design: the web OCR and delete endpoints take the user from the token and refuse any key outside that user's prefix. Each rule has a pytest + moto test that tries to cross the boundary and expects to be refused.
+Two less obvious paths needed closing too:
+
+- **Conversation sessions.** Bedrock session IDs are not tied to a user. A client could send someone else's session ID and continue their conversation, history included. The chat Lambda now checks the caller's own saved turns in DynamoDB before reusing a session, and starts a fresh one otherwise.
+- **Deletes.** Removing a file from S3 doesn't remove its vectors. A delete under `kb/` fires its own event, and the indexer runs an ingestion so the deleted document stops showing up in answers.
+
+The same rule extends to every other path: the web OCR, polling, rename, and delete endpoints take the user from the token and refuse any key outside that user's prefix, and delete also requires the Cognito `admin` group. Each rule has a pytest + moto test that tries to cross the boundary and expects to be refused. I wrote those tests first, watched all 19 fail against the old code, and then made them pass.
 
 This applies directly to any chatbot that serves more than one customer from one index: order history, saved addresses, account notes, or B2B price lists. Retrieval filters, set from a verified identity, are the boundary. The prompt is not.
 
@@ -108,11 +121,15 @@ For a public-facing chatbot I'd add these layers on top:
 
 A new extracted-text file in S3 fires an event that starts a Knowledge Base ingestion job. Nobody has to remember to re-index. The Knowledge Base splits the text into fixed 500-token chunks with 10% overlap and embeds them with Titan Text Embeddings v2. Scanned documents are short and fairly uniform, so fixed-size chunking works well and is easy to predict. Smarter chunking (by section or by heading) would earn its keep on long PDFs.
 
-A Knowledge Base allows one running ingestion job per data source, so a burst of uploads produces `ConflictException` if each file starts its own job. The indexer treats a conflict as "a job is already running" and lets the running job, or the next one, pick up the new files. A product catalog that changes in bulk would hit this on day one, so it's worth designing for up front.
+A Knowledge Base allows one running ingestion job per data source, so a burst of uploads produces `ConflictException` if each file starts its own job. It's tempting to treat a conflict as "a job is already running, it'll pick up my file," but that job may have listed S3 before the new file landed. The indexer waits for the running job to finish and then starts its own. If it runs out of time, it raises and lets Lambda's async retry try again. A product catalog that changes in bulk would hit this on day one, so it's worth designing for up front.
+
+## Photos with no text
+
+OCR only finds printed words. A photo of two runners crossing a creek has almost none, so at first it indexed as an empty file and chat could never find it. Now the web pipeline sends each image to Nova Lite with a short instruction: describe the people, place, objects, activity, and conditions, and say how deep any water, snow, or mud is relative to the people. The description is stored alongside the OCR text, so "how deep was the water?" has something to retrieve. The instruction is general on purpose. It covers any scene, not just the one I tested with.
 
 ## Model and vector store selection
 
-**Model: Amazon Nova Lite.** The workload is a few thousand tokens of retrieved text in and a short answer out, a few times a week. Nova Lite reads clearly structured excerpts and cites them reliably. A larger model would cost several times more for no gain on a task this narrow. The upgrade path stays open: the model is one ARN in the Lambda, so switching to a Claude model on Bedrock is a one-line change if answer quality ever falls short.
+**Answers: Amazon Nova Pro. Photo descriptions: Amazon Nova Lite.** I started with Nova Lite for answers, on the theory that restating retrieved text is a small model's job. Testing proved that wrong for one class of question. Retrieval returned the right document first every time, but Lite refused several phrasings when the match depended on the file name ("the creek at Leadville" against `LeadvilleRaceCreekCrossing.jpg`). I confirmed retrieval separately with the Retrieve API before blaming the model, so I knew which half of the pipeline was failing. Nova Pro answered every phrasing correctly, cited the source, and still refused off-topic questions. At this volume the difference is a few cents a month. Lite stays on photo descriptions, where it does the job well. The model is one ARN in the Lambda, so trying a Claude model on Bedrock later is a one-line change.
 
 **Vector store: Pinecone free tier.** Bedrock Knowledge Bases can create a managed OpenSearch Serverless collection, but that carries a monthly minimum in the hundreds of dollars before a single query. Pinecone's free tier holds 100K vectors, roughly 50 million tokens of text at this chunk size, which is far more than one person will ever scan. Bedrock still manages ingestion and retrieval. Pinecone only stores the vectors.
 
@@ -120,7 +137,7 @@ A Knowledge Base allows one running ingestion job per data source, so a burst of
 
 ## Conversation memory
 
-Bedrock returns a session ID with each answer. The app sends it back on the next question, so follow-ups like "and what's the deductible?" keep their context. Separately, each question, answer, and citation list gets saved to DynamoDB under the user's ID, with a 90-day TTL so old history deletes itself. If saving history fails, the user still gets their answer. The failure gets logged, not shown, since the answer already exists.
+Bedrock returns a session ID with each answer. The app sends it back on the next question, so follow-ups like "and what's the deductible?" keep their context. Session context cuts both ways: after a few not-found answers, Bedrock's question rewriting can keep steering toward not-found. The web app keeps the conversation across tab switches and has a Clear button that starts a fresh session. Separately, each question, answer, and citation list gets saved to DynamoDB under the user's ID, with a 90-day TTL so old history deletes itself. If saving history fails, the user still gets their answer. The failure gets logged, not shown, since the answer already exists.
 
 ## A sample exchange
 
