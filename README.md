@@ -22,6 +22,16 @@ Building a customer-facing AI chatbot, such as an e-commerce shopping or support
 
 A Next.js web app offers the same scan, chat, and browse features on desktop. A browser has no on-device OCR, so web uploads go through Amazon Textract instead, and photos also get a written description from Nova Lite so a picture with no text in it is still searchable.
 
+### Screenshots
+
+| Chat answers from your documents, with a clickable source | Browse with rename and delete |
+|---|---|
+| ![Chat answering "How high is the water in the creek in Leadville?" from a photo, citing "Leadville race creek crossing"](images/chat.png) | ![Browse list of renamed documents with rename and delete buttons](images/browse.png) |
+
+![The document viewer showing a scanned nutrition label](images/viewer.png)
+
+The chat answer above comes from a photo with no text about water in it. The depth comes from the description Nova Lite wrote when the photo was uploaded.
+
 ---
 
 ## Architecture
