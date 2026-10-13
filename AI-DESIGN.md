@@ -111,7 +111,7 @@ What keeps the damage small:
 
 For a public-facing chatbot I'd add these layers on top:
 
-- **Throttling and per-user quotas** on the chat endpoint, so one account can't run up model costs or hammer the API
+- **Per-user quotas** on the chat endpoint, so one account can't run up model costs. DocVault already throttles the API (20 requests/s overall, 2/s on chat), but HTTP API throttling is per route, not per user
 - **Bedrock Guardrails**: a prompt-attack filter on input, and a contextual grounding check on output that blocks answers the sources don't support
 - **Delimited context**: wrap retrieved text in clear markers and tell the model it's data, not instructions. It helps, but it's not a guarantee
 - **An adversarial test set**: injected documents and jailbreak questions, run on every prompt or model change

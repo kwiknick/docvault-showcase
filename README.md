@@ -17,7 +17,7 @@ Building a customer-facing AI chatbot, such as an e-commerce shopping or support
 1. **Scan.** Point the phone camera at a document and tap once. Text recognition runs on the device, so the image never goes to a third-party OCR service.
 2. **Upload.** The app saves the job to a local queue first, then uploads the image and the extracted text straight to S3 through short-lived presigned URLs. No connection? The job waits in the queue and retries later.
 3. **Index.** A new text file in S3 triggers a server-side indexer. It copies the text to an area only the server can write, tags it with the owner's user ID, and starts ingestion into a Bedrock Knowledge Base. The text gets chunked, embedded, and stored in a vector index.
-4. **Ask.** The chat screen sends a question to a Lambda function. The function retrieves the most relevant chunks, has the model answer only from those chunks, and returns the answer plus the source documents it used.
+4. **Ask.** The chat screen sends a question to a Lambda function. The function retrieves the most relevant chunks, has the model answer only from those chunks, and returns the answer plus the source documents it used. On the web, each source is a link that opens the original document, so checking an answer takes one click.
 5. **Browse.** A list or grid of every document, with a fullscreen viewer, rename, and delete (admins only). Renaming re-indexes the document, so answers cite the new name.
 
 A Next.js web app offers the same scan, chat, and browse features on desktop. A browser has no on-device OCR, so web uploads go through Amazon Textract instead, and photos also get a written description from Nova Lite so a picture with no text in it is still searchable.
@@ -95,7 +95,7 @@ sequenceDiagram
 - **Amazon Bedrock (Nova Pro and Nova Lite)**: Pro writes cited answers, Lite describes uploaded photos
 - **Pinecone**: external vector store behind the Knowledge Base, with its API key held in Secrets Manager
 - **Lambda (Python 3.12)**: upload presign, document list, rename, and delete, chat, Textract OCR, and the indexer, each with its own least-privilege IAM role and a shared helpers layer
-- **API Gateway (HTTP API) + Cognito**: a JWT authorizer on every route, an invite-only user pool, SRP sign-in, no client secret on the devices, and an `admin` group that gates delete
+- **API Gateway (HTTP API) + Cognito**: a JWT authorizer on every route, throttling (tighter on chat, where each call costs a model invocation), an invite-only user pool, SRP sign-in, no client secret on the devices, and an `admin` group that gates delete
 - **S3**: a private, encrypted, versioned bucket. Client data lives under `users/{userId}/`, and the indexed copies under `kb/{userId}/`, which only the server writes
 - **DynamoDB**: chat history keyed by user, with TTL expiry
 - **Amazon Textract**: OCR for web uploads, synchronous for images and asynchronous for PDFs
